@@ -23,41 +23,56 @@ except ImportError:
         def setCache(self, key, value): return "fail"
         def delCache(self, key): return "fail"
 
-def unpack_packer(p, a, c, k):
-    def int2base(x, base):
-        chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        if x < 0:
-            return "-" + int2base(-x, base)
-        res = []
-        while x > 0:
-            res.append(chars[x % base])
-            x //= base
-        return "".join(reversed(res)) if res else "0"
-
-    d = {}
-    while c > 0:
-        c -= 1
-        key = int2base(c, a)
-        val = k[c] if c < len(k) and k[c] else key
-        d[key] = val
-
-    def replace_token(match):
-        w = match.group(0)
-        return d.get(w, w)
-
-    return re.sub(r'\b\w+\b', replace_token, p)
-
 class Spider(SpiderBase):
     def __init__(self):
         super(Spider, self).__init__()
-        self.defaultHost = "https://www.thisav.my"
-        self.baseHost = self.defaultHost
-        self.navUrls = ["https://x99dh.cc", "https://x99dh.one"]
+        # 主源与兜底穿透镜像集群（两者数据与 UUID 完全镜像共用）
+        self.primaryHost = "https://missav.ws"
+        self.fallbackHost = "https://www.thisav.my"
+        self.baseHost = self.primaryHost
+        
         self.tgGroup = "https://t.me/tvshare23"
         self.brandActor = "TG群: @tvshare23"
         self.brandDirector = "蝴蝶影视"
         self._ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         self.options = {}
+
+        self.categoryRoutes = {
+            "chinese_subtitle": "/dm278/cn/chinese-subtitle",
+            "new": "/dm539/cn/new",
+            "release": "/dm635/cn/release",
+            "uncensored_leak": "/dm817/cn/uncensored-leak",
+            "today_hot": "/dm301/cn/today-hot",
+            "weekly_hot": "/dm170/cn/weekly-hot",
+            "monthly_hot": "/dm273/cn/monthly-hot",
+            "actresses": "/cn/actresses",
+            "actresses_ranking": "/cn/actresses/ranking",
+            "genres": "/cn/genres",
+            "makers": "/cn/makers",
+            "vr": "/cn/genres/VR",
+            "fc2": "/dm597/cn/fc2",
+            "heyzo": "/dm2208642/cn/heyzo",
+            "tokyohot": "/dm42/cn/tokyohot",
+            "1pondo": "/dm5199603/cn/1pondo",
+            "caribbeancom": "/dm7704788/cn/caribbeancom",
+            "caribbeancompr": "/dm91887/cn/caribbeancompr",
+            "10musume": "/dm7208981/cn/10musume",
+            "pacopacomama": "/dm3600557/cn/pacopacomama",
+            "gachinco": "/dm150/cn/gachinco",
+            "siro": "/dm36/cn/siro",
+            "luxu": "/dm34/cn/luxu",
+            "gana": "/dm34/cn/gana",
+            "scute": "/dm38/cn/scute",
+            "maan": "/dm1004/cn/maan",
+            "ara": "/dm34/cn/ara",
+            "naughty4610": "/dm33/cn/naughty4610",
+            "naughty0930": "/dm37/cn/naughty0930",
+            "madou": "/dm63/cn/madou",
+            "twav": "/dm31/cn/twav",
+            "furuke": "/dm15/cn/furuke",
+            "marriedslash": "/dm37/cn/marriedslash",
+            "xxxav": "/dm42/cn/xxxav"
+        }
 
         self.color_palette = [
             ("1e3a8a", "60a5fa"), ("14532d", "4ade80"), ("701a75", "f472b6"),
@@ -70,10 +85,31 @@ class Spider(SpiderBase):
         self.ctx.verify_mode = ssl.CERT_NONE
 
         self.cj = http.cookiejar.CookieJar()
-        self.opener = urllib.request.build_opener(
+        self._build_opener()
+
+    def _build_opener(self):
+        handlers = [
             urllib.request.HTTPCookieProcessor(self.cj),
             urllib.request.HTTPSHandler(context=self.ctx)
-        )
+        ]
+        # 尝试挂载本机回环代理（若手机端有本地代理端口运行）
+        for port in [7890, 7897, 10808, 10809]:
+            try:
+                import socket
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.1)
+                if s.connect_ex(('127.0.0.1', port)) == 0:
+                    handlers.append(urllib.request.ProxyHandler({
+                        'http': 'http://127.0.0.1:%d' % port,
+                        'https': 'http://127.0.0.1:%d' % port
+                    }))
+                    s.close()
+                    break
+                s.close()
+            except Exception:
+                pass
+
+        self.opener = urllib.request.build_opener(*handlers)
 
     def init(self, extend=""):
         if isinstance(extend, dict):
@@ -83,12 +119,10 @@ class Spider(SpiderBase):
                 self.options = json.loads(extend)
             except Exception:
                 self.options = {}
-
-        self._get_active_host()
         return True
 
     def getName(self):
-        return "蝴蝶·ThisAV完整版"
+        return "蝴蝶影视·MissAV"
 
     def isVideoFormat(self, url):
         low = (url or "").lower()
@@ -97,174 +131,91 @@ class Spider(SpiderBase):
     def manualVideoCheck(self):
         return False
 
-    def _resolve_nav_sites(self):
+    def _raw_fetch(self, target_url, host_ctx=""):
+        cur_host = host_ctx if host_ctx else self.baseHost
         headers = {
             "User-Agent": self._ua,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Encoding": "gzip, deflate"
-        }
-
-        for nav in self.navUrls:
-            try:
-                req = urllib.request.Request(nav, headers=headers)
-                with self.opener.open(req, timeout=8) as resp:
-                    raw = resp.read()
-                    enc = getattr(resp, "headers", {}).get("Content-Encoding", "")
-                    if raw.startswith(b"\x1f\x8b") or enc == "gzip":
-                        raw = gzip.decompress(raw)
-                    text = raw.decode("utf-8", errors="ignore")
-            except urllib.error.HTTPError as e:
-                try:
-                    raw = e.read()
-                    if raw.startswith(b"\x1f\x8b"):
-                        raw = gzip.decompress(raw)
-                    text = raw.decode("utf-8", errors="ignore")
-                except Exception:
-                    text = ""
-            except Exception:
-                continue
-
-            if not text:
-                continue
-
-            b64_blocks = re.findall(r'["\']([A-Za-z0-9+/=]{100,})["\']', text)
-            for b in b64_blocks:
-                try:
-                    decoded = base64.b64decode(b).decode("utf-8", errors="ignore")
-                    unquoted = urllib.parse.unquote(decoded)
-                    if "MissAV" in unquoted and "[" in unquoted:
-                        site_list = json.loads(unquoted)
-                        for item in site_list:
-                            if item.get("name") == "MissAV":
-                                cand_urls = []
-                                main_url = item.get("url", "")
-                                if main_url:
-                                    cand_urls.append(main_url)
-                                for u_obj in item.get("urls", []):
-                                    u = u_obj.get("url", "")
-                                    if u and u not in cand_urls:
-                                        cand_urls.append(u)
-
-                                for c_url in cand_urls:
-                                    parsed = urllib.parse.urlparse(c_url)
-                                    base = "%s://%s" % (parsed.scheme, parsed.netloc)
-                                    chk = self._fetch(base + "/dm247/cn", check_host=False)
-                                    if chk.get("code") == 200:
-                                        return base
-                except Exception:
-                    continue
-
-        return self.defaultHost
-
-    def _get_active_host(self):
-        cached_host = self.getCache("thisav_live_host")
-        if cached_host and cached_host.startswith("http"):
-            self.baseHost = cached_host
-            return self.baseHost
-
-        new_host = self._resolve_nav_sites()
-        self.baseHost = new_host if new_host else self.defaultHost
-        self.setCache("thisav_live_host", self.baseHost)
-        return self.baseHost
-
-    def _fetch(self, target_url, referer="", check_host=True):
-        if not target_url:
-            return {"code": 0, "text": "", "err": "", "final_url": ""}
-        if target_url.startswith("//"):
-            target_url = "https:" + target_url
-        elif target_url.startswith("/"):
-            target_url = self.baseHost + target_url
-
-        headers = {
-            "User-Agent": self._ua,
-            "Referer": referer if referer else (self.baseHost + "/"),
+            "Referer": cur_host + "/",
+            "Origin": cur_host,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Accept-Encoding": "gzip, deflate",
-            "Connection": "keep-alive",
+            "Connection": "keep-alive"
         }
-
-        last_err = ""
-        for attempt in range(2):
-            try:
-                req = urllib.request.Request(target_url, headers=headers)
-                with self.opener.open(req, timeout=12) as resp:
-                    code = resp.getcode()
-                    final_url = resp.geturl()
-                    raw = resp.read()
-                    enc = getattr(resp, "headers", {}).get("Content-Encoding", "")
-                    if raw.startswith(b"\x1f\x8b") or enc == "gzip":
-                        raw = gzip.decompress(raw)
-                    elif enc == "deflate":
-                        try:
-                            raw = zlib.decompress(raw)
-                        except Exception:
-                            raw = zlib.decompress(raw, -zlib.MAX_WBITS)
+        try:
+            req = urllib.request.Request(target_url, headers=headers)
+            with self.opener.open(req, timeout=8) as resp:
+                raw = resp.read()
+                enc = getattr(resp, "headers", {}).get("Content-Encoding", "")
+                if raw.startswith(b"\x1f\x8b") or enc == "gzip":
+                    raw = gzip.decompress(raw)
+                elif enc == "deflate":
                     try:
-                        text = raw.decode("utf-8")
+                        raw = zlib.decompress(raw)
                     except Exception:
-                        text = raw.decode("latin1", errors="ignore")
-                    return {"code": code, "text": text, "err": "", "final_url": final_url}
-            except urllib.error.HTTPError as e:
-                last_err = "HTTP %s" % e.code
-                if e.code in (404, 502, 503) and check_host and attempt == 0:
-                    self.delCache("thisav_live_host")
-                    self._get_active_host()
-                    target_url = re.sub(r'https?://[^/]+', self.baseHost, target_url)
-                    continue
-                err_raw = ""
-                try:
-                    err_raw = e.read().decode("utf-8", errors="ignore")
-                except Exception:
-                    pass
-                return {"code": e.code, "text": err_raw, "err": str(e), "final_url": target_url}
-            except Exception as e:
-                last_err = str(e)
-                if attempt == 0 and check_host:
-                    self.delCache("thisav_live_host")
-                    self._get_active_host()
-                    target_url = re.sub(r'https?://[^/]+', self.baseHost, target_url)
-                    continue
-                return {"code": -1, "text": "", "err": str(e), "final_url": target_url}
+                        raw = zlib.decompress(raw, -zlib.MAX_WBITS)
+                text = raw.decode("utf-8", errors="ignore")
+                return {"code": resp.getcode(), "text": text, "final_url": resp.geturl()}
+        except urllib.error.HTTPError as e:
+            return {"code": e.code, "text": ""}
+        except Exception:
+            return {"code": -1, "text": ""}
 
-        return {"code": -1, "text": "", "err": last_err, "final_url": target_url}
+    def _fetch(self, target_url):
+        # 1. 优先请求 MissAV 原生地址
+        real_url = target_url
+        if real_url.startswith("//"):
+            real_url = "https:" + real_url
+        elif real_url.startswith("/"):
+            real_url = self.baseHost + real_url
+
+        res = self._raw_fetch(real_url, self.baseHost)
+
+        # 2. 真机环境感知：若命中 403 质询盾或超时，自动切换至 ThisAV 穿透通道
+        if res.get("code") in (403, 451, 503, -1) or "Just a moment" in res.get("text", "") or len(res.get("text", "")) < 2000:
+            alt_url = real_url.replace(self.primaryHost, self.fallbackHost)
+            res_alt = self._raw_fetch(alt_url, self.fallbackHost)
+            if res_alt.get("code") == 200 and len(res_alt.get("text", "")) > 2000:
+                return res_alt
+
+        return res
 
     def homeContent(self, filter):
         classes = [
-            {"type_name": "中文字幕", "type_id": "/dm278/cn/chinese-subtitle"},
-            {"type_name": "最近更新", "type_id": "/dm539/cn/new"},
-            {"type_name": "新作上市", "type_id": "/dm635/cn/release"},
-            {"type_name": "无码流出", "type_id": "/dm817/cn/uncensored-leak"},
+            {"type_name": "中文字幕", "type_id": "chinese_subtitle"},
+            {"type_name": "最近更新", "type_id": "new"},
+            {"type_name": "新作上市", "type_id": "release"},
+            {"type_name": "无码流出", "type_id": "uncensored_leak"},
             {"type_name": "女优一览", "type_id": "actresses"},
             {"type_name": "女优排行", "type_id": "actresses_ranking"},
             {"type_name": "全部类型", "type_id": "genres"},
             {"type_name": "全部发行商", "type_id": "makers"},
-            {"type_name": "VR专区", "type_id": "/cn/genres/VR"},
-            {"type_name": "今日热门", "type_id": "/dm301/cn/today-hot"},
-            {"type_name": "本週热门", "type_id": "/dm170/cn/weekly-hot"},
-            {"type_name": "本月热门", "type_id": "/dm273/cn/monthly-hot"},
-            {"type_name": "FC2", "type_id": "/dm597/cn/fc2"},
-            {"type_name": "HEYZO", "type_id": "/dm2208642/cn/heyzo"},
-            {"type_name": "东京热", "type_id": "/dm42/cn/tokyohot"},
-            {"type_name": "一本道", "type_id": "/dm5199603/cn/1pondo"},
-            {"type_name": "加勒比", "type_id": "/dm7704788/cn/caribbeancom"},
-            {"type_name": "加勒比PR", "type_id": "/dm91887/cn/caribbeancompr"},
-            {"type_name": "天然素人", "type_id": "/dm7208981/cn/10musume"},
-            {"type_name": "熟女俱乐部", "type_id": "/dm3600557/cn/pacopacomama"},
-            {"type_name": "Gachinco", "type_id": "/dm150/cn/gachinco"},
-            {"type_name": "SIRO", "type_id": "/dm36/cn/siro"},
-            {"type_name": "LUXU", "type_id": "/dm34/cn/luxu"},
-            {"type_name": "GANA", "type_id": "/dm34/cn/gana"},
-            {"type_name": "S-CUTE", "type_id": "/dm38/cn/scute"},
-            {"type_name": "PRESTIGE", "type_id": "/dm1004/cn/maan"},
-            {"type_name": "ARA", "type_id": "/dm34/cn/ara"},
-            {"type_name": "顽皮4610", "type_id": "/dm33/cn/naughty4610"},
-            {"type_name": "顽皮0930", "type_id": "/dm37/cn/naughty0930"},
-            {"type_name": "麻豆传媒", "type_id": "/dm63/cn/madou"},
-            {"type_name": "TWAV", "type_id": "/dm31/cn/twav"},
-            {"type_name": "Furuke", "type_id": "/dm15/cn/furuke"},
-            {"type_name": "人妻斩", "type_id": "/dm37/cn/marriedslash"},
-            {"type_name": "XXX-AV", "type_id": "/dm42/cn/xxxav"}
+            {"type_name": "VR 专区", "type_id": "vr"},
+            {"type_name": "今日热门", "type_id": "today_hot"},
+            {"type_name": "本周热门", "type_id": "weekly_hot"},
+            {"type_name": "本月热门", "type_id": "monthly_hot"},
+            {"type_name": "FC2", "type_id": "fc2"},
+            {"type_name": "HEYZO", "type_id": "heyzo"},
+            {"type_name": "东京热", "type_id": "tokyohot"},
+            {"type_name": "一本道", "type_id": "1pondo"},
+            {"type_name": "加勒比", "type_id": "caribbeancom"},
+            {"type_name": "加勒比PR", "type_id": "caribbeancompr"},
+            {"type_name": "天然素人", "type_id": "10musume"},
+            {"type_name": "熟女俱乐部", "type_id": "pacopacomama"},
+            {"type_name": "Gachinco", "type_id": "gachinco"},
+            {"type_name": "SIRO", "type_id": "siro"},
+            {"type_name": "LUXU", "type_id": "luxu"},
+            {"type_name": "GANA", "type_id": "gana"},
+            {"type_name": "S-CUTE", "type_id": "scute"},
+            {"type_name": "PRESTIGE", "type_id": "maan"},
+            {"type_name": "ARA", "type_id": "ara"},
+            {"type_name": "顽皮4610", "type_id": "naughty4610"},
+            {"type_name": "顽皮0930", "type_id": "naughty0930"},
+            {"type_name": "麻豆传媒", "type_id": "madou"},
+            {"type_name": "TWAV", "type_id": "twav"},
+            {"type_name": "Furuke", "type_id": "furuke"},
+            {"type_name": "人妻斩", "type_id": "marriedslash"},
+            {"type_name": "XXX-AV", "type_id": "xxxav"}
         ]
 
         result = {"class": classes}
@@ -369,10 +320,14 @@ class Spider(SpiderBase):
         return result
 
     def homeVideoContent(self):
-        res = self.categoryContent("/dm539/cn/new", "1", False, {})
-        return {"list": res.get("list", [])}
+        res = self._fetch(self.primaryHost + "/dm247/cn")
+        vod_list = self._parse_cards(res.get("text", ""), "video")
+        return {"list": vod_list[:16]}
 
     def _parse_cards(self, html, mode="video"):
+        if not html:
+            return []
+
         body = html
         if "</nav>" in body:
             body = body.split("</nav>", 1)[1]
@@ -384,6 +339,7 @@ class Spider(SpiderBase):
 
         if mode in ("actress", "actress_ranking"):
             is_ranking = (mode == "actress_ranking")
+
             chunks = re.findall(r'(<div[^>]*>\s*<a[^>]+href=["\'][^"\']*/actresses/[^"\']+["\'][^>]*>[\s\S]*?</div>\s*</div>)', body)
             if not chunks:
                 chunks = re.findall(r'(<a[^>]+href=["\'][^"\']*/actresses/[^"\']+["\'][^>]*>[\s\S]*?</a>\s*<div[\s\S]*?</div>)', body)
@@ -498,7 +454,7 @@ class Spider(SpiderBase):
         elif 'class="thumbnail' in body:
             card_chunks = body.split('class="thumbnail')[1:]
         else:
-            card_chunks = re.findall(r'(<a[^>]+href=["\'](?:https?://[^"\']+|/[^"\']+)["\'][^>]*>[\s\S]*?</a>)', body)
+            card_chunks = re.findall(r'(<a[^>]+href=["\'][^"\']*(?:missav\.[^"\']+|/[^"\']+)["\'][^>]*>[\s\S]*?</a>)', body)
 
         banned_slugs = {
             "chinese-subtitle", "new", "release", "uncensored-leak", "today-hot",
@@ -532,15 +488,6 @@ class Spider(SpiderBase):
                         title = cand_alt
 
             if not title:
-                a_tags = re.findall(r'<a[^>]*>([\s\S]*?)</a>', ch)
-                for a_inner in a_tags:
-                    t_str = re.sub(r'<[^>]+>', '', a_inner).strip()
-                    if t_str and t_str.lower() != dvd_low and len(t_str) > len(dvd_id):
-                        if not any(k in t_str for k in ("item.", "HD", "FHD", "4K", ":", "条影片")):
-                            title = t_str
-                            break
-
-            if not title:
                 txt_cands = re.findall(r'>([^<]{4,120})<', ch)
                 for tc in txt_cands:
                     t_str = tc.strip()
@@ -558,7 +505,7 @@ class Spider(SpiderBase):
             if pic_m and "item.dvd_id" not in pic_m.group(1):
                 raw_pic = pic_m.group(1).strip()
             else:
-                raw_pic = "https://spic2-147.71352.men/%s/cover-n.jpg" % dvd_low
+                raw_pic = "https://fourhoi.com/%s/cover-t.jpg" % dvd_id
 
             if raw_pic.startswith("//"):
                 raw_pic = "https:" + raw_pic
@@ -568,10 +515,10 @@ class Spider(SpiderBase):
             dur_m = re.search(r'(\d{1,2}:\d{2}(?::\d{2})?)', ch)
             dur = ("蝴蝶影视 · %s" % dur_m.group(1)) if dur_m else "蝴蝶影视"
 
-            full_vod_id = full_href if full_href.startswith("http") else urllib.parse.urljoin(self.baseHost, full_href)
+            pack_id = "%s@@%s" % (dvd_id, full_href)
 
             vod_list.append({
-                "vod_id": full_vod_id,
+                "vod_id": pack_id,
                 "vod_name": title,
                 "vod_pic": proxy_pic,
                 "vod_remarks": dur,
@@ -587,22 +534,17 @@ class Spider(SpiderBase):
         if slug.startswith("folder@"):
             target_url = slug.replace("folder@", "")
             parse_mode = "video"
-        elif slug == "actresses":
-            target_url = "%s/cn/actresses" % self.baseHost
-            parse_mode = "actress"
-        elif slug == "actresses_ranking":
-            target_url = "%s/cn/actresses/ranking" % self.baseHost
-            parse_mode = "actress_ranking"
-        elif slug == "genres":
-            target_url = "%s/cn/genres" % self.baseHost
-            parse_mode = "genres"
-        elif slug == "makers":
-            target_url = "%s/cn/makers" % self.baseHost
-            parse_mode = "makers"
         else:
-            clean_route = slug.rstrip("/")
-            target_url = "%s%s" % (self.baseHost, clean_route)
-            parse_mode = "video"
+            route_path = self.categoryRoutes.get(slug, self.categoryRoutes["chinese_subtitle"])
+            target_url = "%s%s" % (self.primaryHost, route_path)
+            if slug == "actresses":
+                parse_mode = "actress"
+            elif slug == "actresses_ranking":
+                parse_mode = "actress_ranking"
+            elif slug in ("genres", "makers"):
+                parse_mode = slug
+            else:
+                parse_mode = "video"
 
         query_parts = []
         if page > 1:
@@ -614,13 +556,16 @@ class Spider(SpiderBase):
                     val = extend.get(param_k)
                     if val and val != "all":
                         query_parts.append("%s=%s" % (param_k, quote(val)))
+
                 sort_val = extend.get("sort")
                 if sort_val and sort_val != "default":
                     query_parts.append("sort=%s" % sort_val)
+
             elif parse_mode == "video":
                 active_sort = extend.get("sort", "default")
                 if active_sort and active_sort != "default":
                     query_parts.append("sort=%s" % active_sort)
+
                 active_filters = extend.get("filters", "all")
                 if active_filters and active_filters != "all":
                     query_parts.append("filters=%s" % active_filters)
@@ -629,14 +574,14 @@ class Spider(SpiderBase):
             sep = "&" if "?" in target_url else "?"
             target_url = "%s%s%s" % (target_url, sep, "&".join(query_parts))
 
-        res = self._fetch(target_url, referer=self.baseHost + "/dm247/cn")
+        res = self._fetch(target_url)
         vod_list = self._parse_cards(res.get("text", ""), parse_mode)
 
         return {
             "page": page,
             "pagecount": (page + 1) if len(vod_list) >= 12 else page,
             "limit": len(vod_list),
-            "total": 9999,
+            "total": 999,
             "list": vod_list
         }
 
@@ -644,12 +589,10 @@ class Spider(SpiderBase):
         if not html:
             return ""
 
-        # 1. 强特征：hls.loadSource 中绑定的正片 UUID
         hls_match = re.search(r'hls\.loadSource\(["\']https?://[^/]+/([a-f0-9-]{36})/playlist\.m3u8["\']\)', html)
         if hls_match:
             return hls_match.group(1)
 
-        # 2. 匹配 urls 数组（排除带 sample/preview 的片段）
         urls_block = re.search(r'urls:\s*\[\s*["\']([^"\']+)["\']', html)
         if urls_block:
             target_link = urls_block.group(1)
@@ -658,7 +601,6 @@ class Spider(SpiderBase):
                 if u_m:
                     return u_m.group(1)
 
-        # 3. 扫描 script 标签，提取不包含 user_uuid、preview、sample 的正片 UUID
         scripts = re.findall(r'<script[^>]*>([\s\S]*?)</script>', html)
         for sc in scripts:
             if ("surrit.com" in sc or "sixyik.com" in sc) and "sample" not in sc:
@@ -669,7 +611,6 @@ class Spider(SpiderBase):
                     if not any(bad in surround for bad in ("user_uuid", "sample", "preview", "thumbnail", "recombee")):
                         return u
 
-        # 4. 全局提取长视频特征
         cands = re.findall(r'https?://(?:surrit\.com|sixyik\.com)/([a-f0-9-]{36})/(?:playlist\.m3u8)?', html)
         for c in cands:
             c_pos = html.find(c)
@@ -680,135 +621,118 @@ class Spider(SpiderBase):
 
     def detailContent(self, ids):
         raw_id = ids[0] if isinstance(ids, (list, tuple)) else str(ids)
-        target_url = str(raw_id).strip()
 
-        if not target_url.startswith("http"):
-            target_url = urllib.parse.urljoin(self.baseHost, target_url)
+        if "@@" in raw_id:
+            vid, origin_href = raw_id.split("@@", 1)
+        else:
+            vid = raw_id.replace("vod@", "").strip("/")
+            origin_href = "%s/dm247/cn/%s" % (self.primaryHost, vid)
 
-        res = self._fetch(target_url)
-        html_text = res.get("text", "")
-        if not html_text:
-            return {"list": []}
+        cand_urls = [
+            origin_href if origin_href.startswith("http") else urllib.parse.urljoin(self.primaryHost, origin_href),
+            "%s/dm247/cn/%s" % (self.primaryHost, vid),
+            "%s/dm247/cn/%s" % (self.fallbackHost, vid)
+        ]
 
-        title_m = re.search(r'<title>(.*?)</title>', html_text, re.I)
-        raw_title = title_m.group(1).strip() if title_m else "精彩视频"
-        vod_name = raw_title.split(" - ")[0].split(" | ")[0].strip()
+        html = ""
+        for u in cand_urls:
+            res = self._fetch(u)
+            if res.get("code") == 200 and len(res.get("text", "")) > 3000:
+                html = res.get("text", "")
+                break
 
-        poster_m = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html_text, re.I)
-        vod_pic = poster_m.group(1).strip() if poster_m else ""
+        title_m = re.search(r'<title>(.*?)</title>', html, re.I)
+        vod_name = vid.upper()
+        if title_m:
+            t_raw = title_m.group(1).split(" | ")[0].split(" - ")[0].strip()
+            if t_raw:
+                vod_name = t_raw
 
-        from_list = []
-        url_list = []
-        proxy_prefix = "%s/jmpres/\\1/" % self.baseHost
+        actress_matches = re.findall(r'<a[^>]+href=["\'][^"\']*/actresses/[^"\']+["\'][^>]*>([\s\S]*?)</a>', html)
+        clean_actresses = []
+        for a in actress_matches:
+            name = re.sub(r'<[^>]+>', '', a).strip()
+            if name and not any(k in name for k in ("排行", "Ranking", "一览", "SEP", "OCT", "NOV", "202")):
+                if name not in clean_actresses:
+                    clean_actresses.append(name)
 
-        # 方案 A: 增强版通用 Packer 逆向解密 (支持多种换行与混淆排版)
-        packer_matches = re.findall(r"eval\(function\(p,a,c,k,e,[rd]\)[\s\S]*?\}\((['\"][\s\S]*?['\"])\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(['\"][^'\"]+['\"])\.split", html_text)
-        if not packer_matches:
-            packer_matches = re.findall(r"\}\s*\(\s*(['\"][\s\S]*?['\"])\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(['\"][^'\"]+['\"])\.split", html_text)
+        actor_text = ", ".join(clean_actresses) if clean_actresses else self.brandActor
 
-        if packer_matches:
-            p_raw, a_str, c_str, k_raw = packer_matches[0]
-            p = p_raw.strip("'\"")
-            a = int(a_str)
-            c = int(c_str)
-            k = k_raw.strip("'\"").split("|")
-            unpacked_code = unpack_packer(p, a, c, k)
-
-            source_1080 = re.search(r"source1280\s*=\s*['\"]([^'\"]+)['\"]", unpacked_code)
-            source_720 = re.search(r"source842\s*=\s*['\"]([^'\"]+)['\"]", unpacked_code)
-            source_auto = re.search(r"source\s*=\s*['\"]([^'\"]+)['\"]", unpacked_code)
-
-            for name, src_m in [("1080P超清", source_1080), ("720P高清", source_720), ("自适应线路", source_auto)]:
-                if src_m:
-                    u = src_m.group(1)
-                    if "sample" not in u and "preview" not in u:
-                        proxy_u = re.sub(r'https?://(([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,})/', proxy_prefix, u)
-                        from_list.append(name)
-                        url_list.append("正片$%s" % proxy_u)
-
-        # 方案 B: Surrit/Sixyik 正片 UUID 提取 (直通母流，彻底跳过网页嗅探)
-        if not from_list:
-            uuid = self._extract_surrit_uuid(html_text)
-            if uuid:
-                raw_stream = "https://surrit.com/%s/playlist.m3u8" % uuid
-                proxy_u = re.sub(r'https?://(([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,})/', proxy_prefix, raw_stream)
-                from_list.append("超清原画正片")
-                url_list.append("正片$%s" % proxy_u)
-
-        # 方案 C: 兜底原线
-        if not from_list:
-            from_list.append("⚠️网页嗅探(易偶发6秒)")
-            url_list.append("正片$%s" % target_url)
-
-        play_from = "$$$".join(from_list)
-        play_url = "$$$".join(url_list)
-
-        intro_desc = (
-            "【官方交流群: %s】\n"
+        desc_m = re.search(r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']*)["\']', html)
+        desc = desc_m.group(1).strip() if desc_m else "蝴蝶影视高清聚合，全网同步更新。"
+        vod_content = (
+            "【🔥 官方交流群: %s】\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "【当前接入节点】: %s\n"
-            "【解析通道状态】: %s\n"
-            "影片标题：%s"
-        ) % (self.tgGroup, self.baseHost, from_list[0], vod_name)
-        escaped_desc = intro_desc.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            "%s"
+        ) % (self.tgGroup, desc)
+        escaped_desc = vod_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        surrit_uuid = self._extract_surrit_uuid(html)
+
+        play_froms = []
+        play_urls = []
+
+        if surrit_uuid:
+            real_m3u8 = "https://surrit.com/%s/playlist.m3u8" % surrit_uuid
+            play_froms.append("蝴蝶正片专线")
+            play_urls.append("超清原画正片$%s" % real_m3u8)
+
+        pic = "https://fourhoi.com/%s/cover-n.jpg@Referer=%s/@User-Agent=%s" % (vid, self.baseHost, quote(self._ua))
 
         return {
             "list": [{
-                "vod_id": target_url,
+                "vod_id": raw_id,
                 "vod_name": html_lib.unescape(vod_name),
-                "vod_pic": vod_pic,
-                "vod_actor": self.brandActor,
+                "vod_pic": pic,
+                "vod_actor": actor_text,
                 "vod_director": self.brandDirector,
                 "vod_remarks": "蝴蝶影视",
                 "vod_content": escaped_desc,
-                "vod_play_from": play_from,
-                "vod_play_url": play_url
+                "vod_play_from": "$$$".join(play_froms) if play_froms else "蝴蝶专线",
+                "vod_play_url": "$$$".join(play_urls) if play_urls else ("超清原画正片$" + cand_urls[0])
             }]
         }
 
     def playerContent(self, flag, id, vipFlags):
-        play_url = str(id).strip()
-        headers = {
-            "User-Agent": self._ua,
-            "Referer": self.baseHost + "/",
-            "Accept": "*/*"
-        }
-        is_page = not play_url.endswith(".m3u8") and not play_url.endswith(".mp4")
+        url = str(id).strip()
         return {
-            "parse": 1 if is_page else 0,
+            "parse": 0,
             "jx": 0,
-            "url": play_url,
-            "header": headers
+            "url": url,
+            "header": {
+                "User-Agent": self._ua,
+                "Referer": "https://missav.ws/",
+                "Origin": "https://missav.ws",
+                "Accept": "*/*",
+                "Connection": "keep-alive"
+            }
         }
 
     def searchContent(self, key, quick, pg="1"):
-        page_int = int(pg) if str(pg).isdigit() else 1
-        encoded_key = urllib.parse.quote(key)
-
-        if page_int > 1:
-            search_url = "%s/cn/search/%s?page=%d" % (self.baseHost, encoded_key, page_int)
-        else:
-            search_url = "%s/cn/search/%s" % (self.baseHost, encoded_key)
+        page = int(pg) if str(pg).isdigit() else 1
+        search_url = "%s/search/%s" % (self.primaryHost + "/dm247/cn", quote(key))
+        if page > 1:
+            search_url = "%s?page=%d" % (search_url, page)
 
         res = self._fetch(search_url)
         vod_list = self._parse_cards(res.get("text", ""), "video")
 
         return {
-            "page": page_int,
-            "pagecount": page_int + 1 if len(vod_list) >= 12 else page_int,
+            "page": page,
+            "pagecount": (page + 1) if len(vod_list) >= 12 else page,
             "limit": len(vod_list),
-            "total": 9999,
+            "total": 999,
             "list": vod_list
         }
 
     def action(self, action):
-        return {"msg": "ThisAV自愈生产蜘蛛运行正常"}
+        return {"msg": "ok"}
 
     def liveContent(self):
         return ""
 
     def localProxy(self, params):
-        return [404, "text/plain; charset=utf-8", "Proxy not configured"]
+        return [404, "text/plain; charset=utf-8", "Disabled"]
 
     def destroy(self):
         self.options = {}
