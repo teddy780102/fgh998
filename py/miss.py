@@ -10,7 +10,7 @@ class Spider(Spider):
     def init(self, extend="{}"):
         config = json.loads(extend)
         self.host = config.get('site', 'https://missav.ws').rstrip('/')
-        self.base_path = "/dm194/cn"
+        self.base_path = "/dm247/cn"
         
         # 配置无头浏览器模式（不弹出窗口）
         self.co = ChromiumOptions()
