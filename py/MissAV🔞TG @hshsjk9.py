@@ -2,17 +2,15 @@
 ==================================================
 @Spider Name : MissAV
 @Author      : 飞鱼
-@Version     : 1.0.1
-@Description : TVBox/CatVod MissAV Spider Plugin
+@Version     : 1.0.3
+@Description : TVBox/CatVod MissAV 最新改版高兼容插件
 ==================================================
 """
 
 import json
 import sys
 import re
-import base64
-from urllib.parse import urljoin, quote, unquote
-from pyquery import PyQuery as pq
+from urllib.parse import urljoin, quote
 
 # 兼容 Spider 基础类导入
 sys.path.append('..')
@@ -20,17 +18,21 @@ from base.spider import Spider
 
 class Spider(Spider):
     author = "飞鱼"
-    version = "1.0.1"
+    version = "1.0.3"
 
+    # 使用高仿真主流浏览器请求头，提供 Referer 绕过底层反爬规则
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://missav02.xyz/'
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Referer': 'https://missav02.xyz'
     }
     
-    # 轮询域名列表（优先使用用户指定的 missav02.xyz）
+    # 轮询域名列表：优先请求你本地测试秒开的最新节点
     domains = [
         'https://missav02.xyz',
-        'https://missav.app'
+        'https://missav.app',
+        'https://missav.ai'
     ]
 
     def getDependence(self):
@@ -51,7 +53,7 @@ class Spider(Spider):
     def action(self, action):
         pass
 
-    # 核心轮询请求工具：支持多域名故障转移
+    # 核心轮询请求工具，支持多域名故障转移
     def _fetch_with_fallback(self, path):
         for domain in self.domains:
             full_url = urljoin(domain, path)
@@ -61,39 +63,82 @@ class Spider(Spider):
                     return rsp.text, domain
             except Exception:
                 continue
-        return None, self.domains[0]
+        return None, self.domains
 
     # 通用视频列表卡片解析器逻辑
     def _parse_cards(self, doc, base_domain):
         videos = []
-        items = doc('div.grid > div, div.thumbnail, div.item, .relative.group')
-        if len(items) == 0:
-            items = doc('a[href*="/videos/"], a[href*="/voddetail/"]')
-            
+        
+        # 精准匹配包含视频卡片的核心元素节点（包括最新版的响应式 grid 盒子）
+        items = doc('div.grid > div, div.thumbnail, .relative.group, a[href*="/videos/"]')
+        
         for item in items.items():
-            a_tag = item if item.is_('a') else item('a').eq(0)
-            img_tag = item('img').eq(0)
-            
+            # 确保定位到正确的 a 标签
+            a_tag = item if item.is_('a') else item('a[href*="/videos/"]').eq(0)
+            if not a_tag:
+                a_tag = item('a').eq(0)
+                
             href = a_tag.attr('href')
             if not href:
                 continue
                 
+            # 过滤并提取标准化 vod_id
             vod_id = href.replace(base_domain, "")
+            if not vod_id.startswith('/'):
+                vod_id = '/' + vod_id
             
-            vod_name = img_tag.attr('alt') or item('.title').text() or item('h3').text() or "未知影片"
+            img_tag = item('img').eq(0)
+            
+            # 【重要】修复不显示内容的核心：必须优先提取 data-src 懒加载海报属性
             vod_pic = img_tag.attr('data-src') or img_tag.attr('src') or ""
             if vod_pic and not vod_pic.startswith('http'):
                 vod_pic = urljoin(base_domain, vod_pic)
                 
-            vod_remarks = item('.duration').text() or item('.date').text() or ""
-
-            videos.append({
-                "vod_id": vod_id,
-                "vod_name": vod_name.strip(),
-                "vod_pic": vod_pic,
-                "vod_remarks": vod_remarks.strip()
-            })
-        return videos
+            # 提取标题，多重节点机制防留空
+            vod_name = img_tag.attr('alt') or item('h3').text() or item('.title').text() or "未知影片"
+            
+            # 提取影片时长或上架日期作为角标备注
+            vod_remarks = ""
+            duration_node = item('.duration') or item('span.absolute')
+            if duration_node:
+                vod_remarks = duration_node.text()
+            
+            # 只把有效视频加入列表，跳过干扰分类链接
+            if '/videos/' in vod_id:
+                videos.append({
+                    "vod_id": vod_id,
+                    "vod_name": vod_name.strip(),
+                    "vod_pic": vod_pic,
+                    "vod_remarks": v_remarks if 'v_remarks' in locals() else vod_remarks.strip()
+                })
+                
+        # 兜底提取逻辑：捕捉顶层可能遗漏的大图推荐位
+        if len(videos) == 0:
+            for a_sub in doc('a[href*="/videos/"]').items():
+                sub_href = a_sub.attr('href')
+                sub_img = a_sub('img').eq(0)
+                if sub_href and sub_img:
+                    v_id = sub_href.replace(base_domain, "")
+                    v_name = sub_img.attr('alt') or "推荐影片"
+                    v_pic = sub_img.attr('data-src') or sub_img.attr('src') or ""
+                    if v_pic and not v_pic.startswith('http'):
+                        v_pic = urljoin(base_domain, v_pic)
+                    videos.append({
+                        "vod_id": v_id if v_id.startswith('/') else '/' + v_id,
+                        "vod_name": v_name.strip(),
+                        "vod_pic": v_pic,
+                        "vod_remarks": "推荐"
+                    })
+                    
+        # 内存级终极去重，防止网格节点重复渲染
+        seen = set()
+        unique_videos = []
+        for v in videos:
+            if v['vod_id'] not in seen:
+                seen.add(v['vod_id'])
+                unique_videos.append(v)
+                
+        return unique_videos
 
     # 1. 首页推荐数据 & 分类菜单
     def homeContent(self, filter):
@@ -122,8 +167,10 @@ class Spider(Spider):
             result['filters'] = filters
 
         try:
+            # 最新更新页面包含最全的视频瀑布流列表
             html, base_domain = self._fetch_with_fallback("/label/new/")
             if html:
+                from pyquery import PyQuery as pq
                 doc = pq(html)
                 result['list'] = self._parse_cards(doc, base_domain)
             else:
@@ -136,17 +183,19 @@ class Spider(Spider):
     def homeVideoContent(self):
         return self.homeContent(False)
 
-    # 2. 分类列表数据处理
+    # 2. 分类页面列表数据处理
     def categoryContent(self, tid, pg, filter, extend):
         result = {}
         page = int(pg)
         target_cate_id = extend.get('cateId', tid) if extend else tid
         
+        # 兼容老版整型 ID 路由及新版混合字母路由
         path = f"/vodtype/{target_cate_id}-{page}/" if target_cate_id.isdigit() else f"/genres/{target_cate_id}?page={page}"
         
         try:
             html, base_domain = self._fetch_with_fallback(path)
             if html:
+                from pyquery import PyQuery as pq
                 doc = pq(html)
                 result['list'] = self._parse_cards(doc, base_domain)
                 result['page'] = page
@@ -162,7 +211,7 @@ class Spider(Spider):
 
     # 3. 详情页解析
     def detailContent(self, array):
-        vod_id = array[0]
+        vod_id = array if isinstance(array, list) else array
         result = {}
         
         try:
@@ -170,6 +219,7 @@ class Spider(Spider):
             if not html:
                 return {"list": []}
                 
+            from pyquery import PyQuery as pq
             doc = pq(html)
             
             title = doc('h1').text() or doc('.title').text() or "未获取到名称"
@@ -195,11 +245,11 @@ class Spider(Spider):
                 "vod_content": desc.strip()
             }
             
-            vod["vod_play_from"] = "MissAV"
+            vod["vod_play_from"] = "MissAV_Line"
             vod["vod_play_url"] = f"立即播放${vod_id}"
             
             result['list'] = [vod]
-        except Exception as e:
+        except Exception:
             result['list'] = []
 
         return result
@@ -213,41 +263,6 @@ class Spider(Spider):
         try:
             html, base_domain = self._fetch_with_fallback(path)
             if html:
+                from pyquery import PyQuery as pq
                 doc = pq(html)
                 result['list'] = self._parse_cards(doc, base_domain)
-            else:
-                result['list'] = []
-        except Exception:
-            result['list'] = []
-            
-        return result
-
-    # 5. 播放地址解析
-    def playerContent(self, flag, id, vipFlags):
-        result = {}
-        try:
-            html, base_domain = self._fetch_with_fallback(id)
-            if not html:
-                return {"parse": 0, "url": ""}
-                
-            m3u8_match = re.search(r"window\.source_url\s*=\s*['"]([^'"]+\.m3u8[^'"]*)['"]", html)
-            if not m3u8_match:
-                m3u8_match = re.search(r"url['"]\s*:\s*['"]([^'"]+\.m3u8[^'"]*)['"]", html)
-            if not m3u8_match:
-                m3u8_match = re.search(r"['"](https?://[^'"]+\.m3u8[^'"]*)['"]", html)
-                
-            if m3u8_match:
-                video_url = m3u8_match.group(1)
-                result["parse"] = 0
-                result["playUrl"] = ""
-                result["url"] = video_url
-                result["header"] = json.dumps(self.headers)
-            else:
-                full_url = urljoin(base_domain, id)
-                result["parse"] = 1
-                result["url"] = full_url
-                result["header"] = json.dumps(self.headers)
-        except Exception:
-            result = {"parse": 0, "url": ""}
-            
-        return result
