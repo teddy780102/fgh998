@@ -28,6 +28,7 @@ class Spider(Spider):
     
     # 轮询域名列表（优先使用 missav02.xyz，失败自动切换 missav.app）
     domains = [
+        'https://missav.ws',
         'https://missav02.xyz',
         'https://missav.app'
     ]
